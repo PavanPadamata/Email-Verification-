@@ -179,3 +179,26 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
 
 /* Empty */
 .empty-state { text-align: center; color: var(--muted); padding: 3rem 0; font-size: 0.9rem; }
+
+/* Control buttons */
+.control-row {
+  display: flex; gap: 0.6rem; margin-bottom: 1rem;
+}
+.ctrl-btn {
+  flex: 1; padding: 0.5rem 0.8rem;
+  border-radius: 6px; border: 1px solid;
+  font-family: var(--mono); font-size: 0.78rem;
+  cursor: pointer; transition: background 0.15s;
+}
+.ctrl-btn.pause { border-color: #7c6aff; color: #7c6aff; background: #0f0d1f; }
+.ctrl-btn.pause:hover { background: #1a1630; }
+.ctrl-btn.resume { border-color: #22c55e; color: #22c55e; background: #0a1a0f; }
+.ctrl-btn.resume:hover { background: #0f2e1a; }
+.ctrl-btn.stop { border-color: #ef4444; color: #ef4444; background: #1a0a0a; }
+.ctrl-btn.stop:hover { background: #2e0f0f; }
+
+/* Paused state */
+.job-card.paused { border-color: #2a1f4a; }
+.job-badge.paused { background: #1a1240; color: #7c6aff; }
+.job-badge.stopped { background: #1a1a1a; color: #6b6b80; }
+.paused-label { font-family: var(--mono); font-size: 0.72rem; color: #7c6aff; }

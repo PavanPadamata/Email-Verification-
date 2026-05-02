@@ -13,16 +13,9 @@ const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || '5000');
 const CLI_BIN = process.env.CLI_BIN || 'check_if_email_exists';
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function readMeta(jobDir) { return JSON.parse(fs.readFileSync(path.join(jobDir, 'results.json'), 'utf8')); }
+function writeMeta(jobDir, meta) { fs.writeFileSync(path.join(jobDir, 'results.json'), JSON.stringify(meta, null, 2)); }
 
-function readMeta(jobDir) {
-  return JSON.parse(fs.readFileSync(path.join(jobDir, 'results.json'), 'utf8'));
-}
-
-function writeMeta(jobDir, meta) {
-  fs.writeFileSync(path.join(jobDir, 'results.json'), JSON.stringify(meta, null, 2));
-}
-
-// Known catch-all providers: SMTP verification blocked, assume valid if MX exists
 const CATCH_ALL_DOMAINS = new Set([
   'gmail.com','googlemail.com',
   'yahoo.com','yahoo.co.uk','yahoo.co.in','yahoo.fr','yahoo.de','yahoo.es',
@@ -43,15 +36,9 @@ function classify(result, email) {
 
   if (misc.is_disposable) return 'invalid';
   if (!mx.accepts_mail) return 'invalid';
-
-  // Known catch-all providers: SMTP unreliable, trust MX existence
   if (CATCH_ALL_DOMAINS.has(domain)) return 'valid';
-
-  // New CLI uses top-level is_reachable: safe | invalid | risky
   if (result.is_reachable === 'safe') return 'valid';
   if (result.is_reachable === 'invalid') return 'invalid';
-
-  // Fallback to smtp fields
   if (smtp.is_deliverable === true) return 'valid';
   if (smtp.is_deliverable === false) return 'invalid';
   if (smtp.can_connect_smtp === false) return 'risky';
@@ -66,11 +53,8 @@ function runCLI(email, proxyUrl) {
     const cmd = `${CLI_BIN} ${email}`;
     const child = exec(cmd, { env, timeout: TIMEOUT_MS }, (err, stdout) => {
       if (err) { resolve({ error: err.message }); return; }
-      try {
-        resolve(JSON.parse(stdout.trim()));
-      } catch {
-        resolve({ error: 'parse_error', raw: stdout.trim() });
-      }
+      try { resolve(JSON.parse(stdout.trim())); }
+      catch { resolve({ error: 'parse_error', raw: stdout.trim() }); }
     });
     child.on('error', (e) => resolve({ error: e.message }));
   });
@@ -79,9 +63,7 @@ function runCLI(email, proxyUrl) {
 async function verifyEmail(email, attempt = 0) {
   const proxy = proxyPool.get();
   const proxyUrl = proxy ? proxy.url : null;
-
   const result = await runCLI(email, proxyUrl);
-
   if (result.error) {
     if (proxyUrl) proxyPool.fail(proxyUrl);
     if (attempt < MAX_RETRIES) {
@@ -90,42 +72,45 @@ async function verifyEmail(email, attempt = 0) {
     }
     return { email, classification: 'risky', error: result.error };
   }
-
   if (proxyUrl) proxyPool.success(proxyUrl);
-  const classification = classify(result, email);
-  return { email, classification, result };
+  return { email, classification: classify(result, email), result };
 }
 
 async function processJob(jobId) {
   const jobDir = path.join(JOBS_DIR, jobId);
   const meta = readMeta(jobDir);
-
   meta.status = 'running';
   meta.startedAt = new Date().toISOString();
   writeMeta(jobDir, meta);
 
-  // Parse listmonk format: email,name (skip header row)
   const lines = fs.readFileSync(path.join(jobDir, 'input.csv'), 'utf8')
-    .split('\n').map(l => l.trim()).filter(Boolean);
+    .split('\n').map(l => l.trim()).filter(l => l.includes('@'));
 
-  const emailRows = lines
-    .filter(l => l.includes('@'))
-    .map(l => {
-      const parts = l.split(',').map(p => p.trim());
-      return { email: parts[0].toLowerCase(), name: parts[1] || '' };
-    });
+  const emailRows = lines.map(l => {
+    const parts = l.split(',').map(p => p.trim());
+    return { email: parts[0].toLowerCase(), name: parts[1] || '' };
+  });
 
   const validOut = fs.createWriteStream(path.join(jobDir, 'valid.csv'));
   const invalidOut = fs.createWriteStream(path.join(jobDir, 'invalid.csv'));
   const riskyOut = fs.createWriteStream(path.join(jobDir, 'risky.csv'));
-
-  // Write listmonk format headers
   [validOut, invalidOut, riskyOut].forEach(s => s.write('email,name\n'));
 
   const limit = pLimit(CONCURRENCY);
   let processed = 0, valid = 0, invalid = 0, risky = 0;
+  let aborted = false;
 
   const tasks = emailRows.map(({ email, name }) => limit(async () => {
+    if (aborted) return;
+
+    // Check for pause — wait until resumed or stopped
+    while (true) {
+      const current = readMeta(jobDir);
+      if (current.status === 'stopped') { aborted = true; return; }
+      if (current.status === 'paused') { await sleep(2000); continue; }
+      break; // running
+    }
+
     await sleep(DELAY_MS);
     const res = await verifyEmail(email);
     const row = `${email},${name}\n`;
@@ -146,20 +131,21 @@ async function processJob(jobId) {
   [validOut, invalidOut, riskyOut].forEach(s => s.end());
 
   const finalMeta = readMeta(jobDir);
-  finalMeta.status = 'done';
+  if (!aborted) {
+    finalMeta.status = 'done';
+    finalMeta.finishedAt = new Date().toISOString();
+  }
   finalMeta.processed = processed;
   finalMeta.valid = valid;
   finalMeta.invalid = invalid;
   finalMeta.risky = risky;
-  finalMeta.finishedAt = new Date().toISOString();
   writeMeta(jobDir, finalMeta);
 
-  console.log(`[worker] Job ${jobId} done: ${valid}v ${invalid}i ${risky}r`);
+  console.log(`[worker] Job ${jobId} ${aborted ? 'stopped' : 'done'}: ${valid}v ${invalid}i ${risky}r`);
 }
 
 async function pollForJobs() {
-  if (!fs.existsSync(JOBS_DIR)) { fs.mkdirSync(JOBS_DIR, { recursive: true }); }
-
+  if (!fs.existsSync(JOBS_DIR)) fs.mkdirSync(JOBS_DIR, { recursive: true });
   while (true) {
     const dirs = fs.readdirSync(JOBS_DIR);
     for (const jobId of dirs) {

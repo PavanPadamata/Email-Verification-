@@ -19,20 +19,14 @@ function ensureJobDir(jobId) {
   return dir;
 }
 
-// Parse CSV — supports:
-//   plain:        email@example.com
-//   listmonk:     email,name  (or name,email)
-//   with header:  skips header row
 function parseEmails(content) {
   const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
-  const emailMap = new Map(); // email -> name
-
+  const emailMap = new Map();
   for (const line of lines) {
     if (line.includes(',')) {
       const parts = line.split(',').map(p => p.trim().replace(/^"|"$/g, ''));
-      // detect which column is email
       const emailIdx = parts[0].includes('@') ? 0 : parts[1] && parts[1].includes('@') ? 1 : -1;
-      if (emailIdx === -1) continue; // skip header or non-email rows
+      if (emailIdx === -1) continue;
       const email = parts[emailIdx].toLowerCase();
       const name = emailIdx === 0 ? (parts[1] || '') : (parts[0] || '');
       if (!emailMap.has(email)) emailMap.set(email, name);
@@ -47,34 +41,21 @@ function parseEmails(content) {
 // POST /upload
 app.post('/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-
   const jobId = uuidv4();
   const jobDir = ensureJobDir(jobId);
   const inputPath = path.join(jobDir, 'input.csv');
-
   const content = fs.readFileSync(req.file.path, 'utf8');
   fs.unlinkSync(req.file.path);
-
   const emailMap = parseEmails(content);
-
   if (emailMap.size === 0) return res.status(400).json({ error: 'No valid emails found in file' });
-
-  // Store as listmonk format: email,name
   const csvLines = ['email,name', ...Array.from(emailMap.entries()).map(([e, n]) => `${e},${n}`)];
   fs.writeFileSync(inputPath, csvLines.join('\n'));
-
   const meta = {
-    jobId,
-    status: 'pending',
-    total: emailMap.size,
-    processed: 0,
-    valid: 0,
-    invalid: 0,
-    risky: 0,
+    jobId, status: 'pending', total: emailMap.size,
+    processed: 0, valid: 0, invalid: 0, risky: 0,
     createdAt: new Date().toISOString(),
   };
   fs.writeFileSync(path.join(jobDir, 'results.json'), JSON.stringify(meta, null, 2));
-
   res.json({ jobId, total: emailMap.size });
 });
 
@@ -83,6 +64,24 @@ app.get('/status/:jobId', (req, res) => {
   const metaPath = path.join(JOBS_DIR, req.params.jobId, 'results.json');
   if (!fs.existsSync(metaPath)) return res.status(404).json({ error: 'Job not found' });
   res.json(JSON.parse(fs.readFileSync(metaPath, 'utf8')));
+});
+
+// POST /control/:jobId  { action: 'pause' | 'resume' | 'stop' }
+app.post('/control/:jobId', (req, res) => {
+  const { jobId } = req.params;
+  const { action } = req.body;
+  if (!['pause', 'resume', 'stop'].includes(action)) return res.status(400).json({ error: 'Invalid action' });
+  const metaPath = path.join(JOBS_DIR, jobId, 'results.json');
+  if (!fs.existsSync(metaPath)) return res.status(404).json({ error: 'Job not found' });
+  const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  if (!['running', 'paused', 'claimed'].includes(meta.status)) {
+    return res.status(400).json({ error: `Cannot ${action} a ${meta.status} job` });
+  }
+  if (action === 'pause') meta.status = 'paused';
+  if (action === 'resume') meta.status = 'running';
+  if (action === 'stop') { meta.status = 'stopped'; meta.finishedAt = new Date().toISOString(); }
+  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+  res.json({ jobId, status: meta.status });
 });
 
 // GET /download/:jobId/:type
@@ -99,9 +98,8 @@ app.get('/jobs', (req, res) => {
   if (!fs.existsSync(JOBS_DIR)) return res.json([]);
   const jobs = fs.readdirSync(JOBS_DIR)
     .map(id => {
-      try {
-        return JSON.parse(fs.readFileSync(path.join(JOBS_DIR, id, 'results.json'), 'utf8'));
-      } catch { return null; }
+      try { return JSON.parse(fs.readFileSync(path.join(JOBS_DIR, id, 'results.json'), 'utf8')); }
+      catch { return null; }
     })
     .filter(Boolean)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))

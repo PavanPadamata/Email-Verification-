@@ -9,7 +9,6 @@ function ProgressBar({ pct, color }) {
   return (
     <div className="progress-track">
       <div className="progress-fill" style={{ width: `${pct}%`, background: color }} />
-      <span className="progress-label">{Math.round(pct)}%</span>
     </div>
   );
 }
@@ -23,10 +22,12 @@ function StatPill({ label, value, color }) {
   );
 }
 
-function JobCard({ job, onDownload }) {
+function JobCard({ job, onDownload, onControl }) {
   const pct = job.total > 0 ? (job.processed / job.total) * 100 : 0;
-  const barColor = job.status === "done" ? "#22c55e" : job.status === "error" ? "#ef4444" : "#f59e0b";
-  const isRunning = job.status === "running" || job.status === "claimed";
+  const isActive = job.status === 'running' || job.status === 'claimed';
+  const isPaused = job.status === 'paused';
+  const isDone = job.status === 'done' || job.status === 'stopped';
+  const barColor = job.status === 'done' ? '#22c55e' : job.status === 'error' ? '#ef4444' : job.status === 'stopped' ? '#6b6b80' : job.status === 'paused' ? '#7c6aff' : '#f59e0b';
 
   return (
     <div className={`job-card ${job.status}`}>
@@ -41,7 +42,8 @@ function JobCard({ job, onDownload }) {
       <ProgressBar pct={pct} color={barColor} />
       <div className="job-counts">
         <span>{formatNum(job.processed)} / {formatNum(job.total)}</span>
-        {isRunning && <span className="pulse-dot" />}
+        {isActive && <span className="pulse-dot" />}
+        {isPaused && <span className="paused-label">paused</span>}
       </div>
 
       <div className="stats-row">
@@ -50,11 +52,21 @@ function JobCard({ job, onDownload }) {
         <StatPill label="Risky" value={job.risky} color="#f59e0b" />
       </div>
 
-      {job.status === "done" && (
+      {(isActive || isPaused) && (
+        <div className="control-row">
+          {isPaused ? (
+            <button className="ctrl-btn resume" onClick={() => onControl(job.jobId, 'resume')}>▶ Resume</button>
+          ) : (
+            <button className="ctrl-btn pause" onClick={() => onControl(job.jobId, 'pause')}>⏸ Pause</button>
+          )}
+          <button className="ctrl-btn stop" onClick={() => onControl(job.jobId, 'stop')}>⏹ Stop</button>
+        </div>
+      )}
+
+      {(isDone || isPaused) && (
         <div className="download-row">
-          {["valid", "invalid", "risky"].map(t => (
-            <button key={t} className={`dl-btn ${t}`}
-              onClick={() => onDownload(job.jobId, t)}>
+          {['valid', 'invalid', 'risky'].map(t => (
+            <button key={t} className={`dl-btn ${t}`} onClick={() => onDownload(job.jobId, t)}>
               ↓ {t}.csv
             </button>
           ))}
@@ -70,52 +82,57 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
   const fileRef = useRef();
-  const pollRef = useRef();
 
   async function loadJobs() {
     try {
       const r = await fetch(`${API}/jobs`);
-      const data = await r.json();
-      setJobs(data);
+      setJobs(await r.json());
     } catch {}
   }
 
   useEffect(() => {
     loadJobs();
-    pollRef.current = setInterval(loadJobs, 3000);
-    return () => clearInterval(pollRef.current);
+    const t = setInterval(loadJobs, 3000);
+    return () => clearInterval(t);
   }, []);
 
   async function uploadFile(file) {
     if (!file) return;
-    if (!file.name.endsWith(".csv")) { setError("CSV files only"); return; }
+    if (!file.name.endsWith('.csv')) { setError('CSV files only'); return; }
     setError(null);
     setUploading(true);
     try {
       const fd = new FormData();
-      fd.append("file", file);
-      const r = await fetch(`${API}/upload`, { method: "POST", body: fd });
+      fd.append('file', file);
+      const r = await fetch(`${API}/upload`, { method: 'POST', body: fd });
       const data = await r.json();
       if (data.error) throw new Error(data.error);
       await loadJobs();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setUploading(false);
-    }
+    } catch (e) { setError(e.message); }
+    finally { setUploading(false); }
+  }
+
+  async function onControl(jobId, action) {
+    try {
+      await fetch(`${API}/control/${jobId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      await loadJobs();
+    } catch (e) { setError(e.message); }
   }
 
   function onDrop(e) {
-    e.preventDefault();
-    setDragging(false);
+    e.preventDefault(); setDragging(false);
     uploadFile(e.dataTransfer.files[0]);
   }
 
   function onDownload(jobId, type) {
-    window.open(`${API}/download/${jobId}/${type}`, "_blank");
+    window.open(`${API}/download/${jobId}/${type}`, '_blank');
   }
 
-  const activeJobs = jobs.filter(j => j.status === "running" || j.status === "claimed");
+  const activeJobs = jobs.filter(j => j.status === 'running' || j.status === 'claimed');
 
   return (
     <div className="app">
@@ -129,24 +146,21 @@ export default function App() {
 
       <main className="main">
         <div
-          className={`dropzone ${dragging ? "drag-over" : ""} ${uploading ? "uploading" : ""}`}
+          className={`dropzone ${dragging ? 'drag-over' : ''} ${uploading ? 'uploading' : ''}`}
           onClick={() => !uploading && fileRef.current.click()}
           onDragOver={e => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
         >
-          <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }}
+          <input ref={fileRef} type="file" accept=".csv" style={{ display: 'none' }}
             onChange={e => uploadFile(e.target.files[0])} />
           {uploading ? (
-            <div className="dz-content">
-              <div className="spinner" />
-              <p>Uploading…</p>
-            </div>
+            <div className="dz-content"><div className="spinner" /><p>Uploading…</p></div>
           ) : (
             <div className="dz-content">
               <div className="dz-icon">⬆</div>
               <p className="dz-title">Drop CSV here or click to browse</p>
-              <p className="dz-sub">One email per row. Duplicates removed automatically.</p>
+              <p className="dz-sub">Listmonk format (email,name) or plain emails. Duplicates removed.</p>
             </div>
           )}
         </div>
@@ -155,7 +169,7 @@ export default function App() {
 
         {activeJobs.length > 0 && (
           <div className="active-notice">
-            <span className="pulse-dot" /> {activeJobs.length} job{activeJobs.length > 1 ? "s" : ""} processing
+            <span className="pulse-dot" /> {activeJobs.length} job{activeJobs.length > 1 ? 's' : ''} processing
           </div>
         )}
 
@@ -164,16 +178,14 @@ export default function App() {
             <h2 className="section-title">Jobs</h2>
             <div className="jobs-grid">
               {jobs.map(job => (
-                <JobCard key={job.jobId} job={job} onDownload={onDownload} />
+                <JobCard key={job.jobId} job={job} onDownload={onDownload} onControl={onControl} />
               ))}
             </div>
           </section>
         )}
 
         {jobs.length === 0 && (
-          <div className="empty-state">
-            <p>No jobs yet. Upload a CSV to get started.</p>
-          </div>
+          <div className="empty-state"><p>No jobs yet. Upload a CSV to get started.</p></div>
         )}
       </main>
     </div>
