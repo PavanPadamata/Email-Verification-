@@ -19,6 +19,31 @@ function ensureJobDir(jobId) {
   return dir;
 }
 
+// Parse CSV — supports:
+//   plain:        email@example.com
+//   listmonk:     email,name  (or name,email)
+//   with header:  skips header row
+function parseEmails(content) {
+  const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+  const emailMap = new Map(); // email -> name
+
+  for (const line of lines) {
+    if (line.includes(',')) {
+      const parts = line.split(',').map(p => p.trim().replace(/^"|"$/g, ''));
+      // detect which column is email
+      const emailIdx = parts[0].includes('@') ? 0 : parts[1] && parts[1].includes('@') ? 1 : -1;
+      if (emailIdx === -1) continue; // skip header or non-email rows
+      const email = parts[emailIdx].toLowerCase();
+      const name = emailIdx === 0 ? (parts[1] || '') : (parts[0] || '');
+      if (!emailMap.has(email)) emailMap.set(email, name);
+    } else if (line.includes('@')) {
+      const email = line.toLowerCase();
+      if (!emailMap.has(email)) emailMap.set(email, '');
+    }
+  }
+  return emailMap;
+}
+
 // POST /upload
 app.post('/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -27,22 +52,21 @@ app.post('/upload', upload.single('file'), (req, res) => {
   const jobDir = ensureJobDir(jobId);
   const inputPath = path.join(jobDir, 'input.csv');
 
-  fs.copyFileSync(req.file.path, inputPath);
+  const content = fs.readFileSync(req.file.path, 'utf8');
   fs.unlinkSync(req.file.path);
 
-  const emails = fs.readFileSync(inputPath, 'utf8')
-    .split('\n')
-    .map(l => l.trim())
-    .filter(l => l && l.includes('@'));
+  const emailMap = parseEmails(content);
 
-  // Deduplicate
-  const unique = [...new Set(emails)];
-  fs.writeFileSync(inputPath, unique.join('\n'));
+  if (emailMap.size === 0) return res.status(400).json({ error: 'No valid emails found in file' });
+
+  // Store as listmonk format: email,name
+  const csvLines = ['email,name', ...Array.from(emailMap.entries()).map(([e, n]) => `${e},${n}`)];
+  fs.writeFileSync(inputPath, csvLines.join('\n'));
 
   const meta = {
     jobId,
     status: 'pending',
-    total: unique.length,
+    total: emailMap.size,
     processed: 0,
     valid: 0,
     invalid: 0,
@@ -51,7 +75,7 @@ app.post('/upload', upload.single('file'), (req, res) => {
   };
   fs.writeFileSync(path.join(jobDir, 'results.json'), JSON.stringify(meta, null, 2));
 
-  res.json({ jobId, total: unique.length });
+  res.json({ jobId, total: emailMap.size });
 });
 
 // GET /status/:jobId
@@ -70,7 +94,7 @@ app.get('/download/:jobId/:type', (req, res) => {
   res.download(filePath, `${type}.csv`);
 });
 
-// GET /jobs — list recent jobs
+// GET /jobs
 app.get('/jobs', (req, res) => {
   if (!fs.existsSync(JOBS_DIR)) return res.json([]);
   const jobs = fs.readdirSync(JOBS_DIR)
