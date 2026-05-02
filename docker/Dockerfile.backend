@@ -1,16 +1,18 @@
-# Stage 1: Build the Reacher CLI via Rust
+# Stage 1: Build the CLI from source
 FROM node:20-slim AS builder
 
 RUN apt-get update && apt-get install -y \
-    curl build-essential pkg-config libssl-dev \
+    curl build-essential pkg-config libssl-dev git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Clone and build the CLI binary from the reacherhq repo
-RUN cargo install --git https://github.com/reacherhq/check-if-email-exists reacher_cli
+# Clone and build — binary ends up at target/release/check_if_email_exists
+RUN git clone --depth 1 https://github.com/reacherhq/check-if-email-exists /src
+WORKDIR /src
+RUN cargo build --release --bin check_if_email_exists
 
 # Stage 2: Runtime image
 FROM node:20-slim
@@ -19,16 +21,13 @@ RUN apt-get update && apt-get install -y \
     libssl3 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy CLI binary from builder (binary name is reacher_cli, alias it)
-COPY --from=builder /root/.cargo/bin/reacher_cli /usr/local/bin/check-if-email-exists
+COPY --from=builder /src/target/release/check_if_email_exists /usr/local/bin/check_if_email_exists
 
 WORKDIR /app
 
-# Install backend deps
 COPY backend/package*.json ./backend/
 RUN cd backend && npm install --production
 
-# Install worker deps
 COPY worker/package*.json ./worker/
 RUN cd worker && npm install --production
 
@@ -39,3 +38,4 @@ RUN mkdir -p /jobs
 
 ENV JOBS_DIR=/jobs
 ENV NODE_ENV=production
+ENV CLI_BIN=check_if_email_exists

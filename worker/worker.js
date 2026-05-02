@@ -10,7 +10,7 @@ const DELAY_MS = parseInt(process.env.DELAY_MS || '500');
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = parseInt(process.env.TIMEOUT_MS || '30000');
 const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || '5000');
-const CLI_BIN = process.env.CLI_BIN || 'check-if-email-exists';
+const CLI_BIN = process.env.CLI_BIN || 'check_if_email_exists';
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -42,7 +42,7 @@ function runCLI(email, proxyUrl, attempt = 0) {
     const env = { ...process.env };
     if (proxyUrl) env.ALL_PROXY = proxyUrl;
 
-    const cmd = `${CLI_BIN} --output-format json ${email}`;
+    const cmd = `${CLI_BIN} ${email}`;
     const child = exec(cmd, { env, timeout: TIMEOUT_MS }, (err, stdout) => {
       if (err) { resolve({ error: err.message }); return; }
       try {
