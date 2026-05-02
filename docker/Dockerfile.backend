@@ -1,0 +1,41 @@
+# Stage 1: Build the Reacher CLI via Rust
+FROM node:20-slim AS builder
+
+RUN apt-get update && apt-get install -y \
+    curl build-essential pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install check-if-email-exists CLI
+RUN cargo install check-if-email-exists
+
+# Stage 2: Runtime image
+FROM node:20-slim
+
+RUN apt-get update && apt-get install -y \
+    libssl3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy CLI binary from builder
+COPY --from=builder /root/.cargo/bin/check-if-email-exists /usr/local/bin/check-if-email-exists
+
+WORKDIR /app
+
+# Install backend deps
+COPY backend/package*.json ./backend/
+RUN cd backend && npm install --production
+
+# Install worker deps
+COPY worker/package*.json ./worker/
+RUN cd worker && npm install --production
+
+COPY backend/ ./backend/
+COPY worker/ ./worker/
+
+RUN mkdir -p /jobs
+
+ENV JOBS_DIR=/jobs
+ENV NODE_ENV=production

@@ -1,0 +1,68 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    command: node backend/server.js
+    ports:
+      - "3001:3001"
+    volumes:
+      - jobs_data:/jobs
+    environment:
+      - PORT=3001
+      - JOBS_DIR=/jobs
+      - NODE_ENV=production
+    networks:
+      - app-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/jobs"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    command: node worker/worker.js
+    volumes:
+      - jobs_data:/jobs
+    environment:
+      - JOBS_DIR=/jobs
+      - CONCURRENCY=${CONCURRENCY:-5}
+      - DELAY_MS=${DELAY_MS:-500}
+      - TIMEOUT_MS=${TIMEOUT_MS:-30000}
+      - POLL_INTERVAL=${POLL_INTERVAL:-5000}
+      - CLI_BIN=check-if-email-exists
+      # Proxy pool: comma-separated SOCKS5 URLs
+      # Example: PROXIES=socks5://user:pass@host1:1080,socks5://user:pass@host2:1080
+      - PROXIES=${PROXIES:-}
+    networks:
+      - app-net
+    restart: unless-stopped
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        - VITE_API_URL=${VITE_API_URL:-http://localhost:3001}
+    ports:
+      - "3000:80"
+    networks:
+      - app-net
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  jobs_data:
+
+networks:
+  app-net:
+    driver: bridge

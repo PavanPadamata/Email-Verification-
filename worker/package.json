@@ -1,0 +1,11 @@
+{
+  "name": "email-verifier-worker",
+  "version": "1.0.0",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js"
+  },
+  "dependencies": {
+    "p-limit": "^3.1.0"
+  }
+}
