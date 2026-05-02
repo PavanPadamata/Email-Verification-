@@ -27,7 +27,8 @@ app.post('/upload', upload.single('file'), (req, res) => {
   const jobDir = ensureJobDir(jobId);
   const inputPath = path.join(jobDir, 'input.csv');
 
-  fs.renameSync(req.file.path, inputPath);
+  fs.copyFileSync(req.file.path, inputPath);
+  fs.unlinkSync(req.file.path);
 
   const emails = fs.readFileSync(inputPath, 'utf8')
     .split('\n')
