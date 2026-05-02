@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.backend
+    image: emailverifier-backend
     command: node backend/server.js
     ports:
       - "3001:3001"
@@ -27,6 +28,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.backend
+    image: emailverifier-backend
     command: node worker/worker.js
     volumes:
       - jobs_data:/jobs
@@ -37,8 +39,6 @@ services:
       - TIMEOUT_MS=${TIMEOUT_MS:-30000}
       - POLL_INTERVAL=${POLL_INTERVAL:-5000}
       - CLI_BIN=check-if-email-exists
-      # Proxy pool: comma-separated SOCKS5 URLs
-      # Example: PROXIES=socks5://user:pass@host1:1080,socks5://user:pass@host2:1080
       - PROXIES=${PROXIES:-}
     networks:
       - app-net
@@ -52,6 +52,7 @@ services:
       dockerfile: docker/Dockerfile.frontend
       args:
         - VITE_API_URL=${VITE_API_URL:-http://localhost:3001}
+    image: emailverifier-frontend
     ports:
       - "3000:80"
     networks:
