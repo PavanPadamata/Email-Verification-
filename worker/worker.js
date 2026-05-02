@@ -37,12 +37,13 @@ function classify(result, email) {
   if (misc.is_disposable) return 'invalid';
   if (!mx.accepts_mail) return 'invalid';
   if (CATCH_ALL_DOMAINS.has(domain)) return 'valid';
+  // is_deliverable is strongest signal — wins over catch_all or is_reachable
+  if (smtp.is_deliverable === true) return 'valid';
+  if (smtp.is_catch_all) return 'valid';
   if (result.is_reachable === 'safe') return 'valid';
   if (result.is_reachable === 'invalid') return 'invalid';
-  if (smtp.is_deliverable === true) return 'valid';
   if (smtp.is_deliverable === false) return 'invalid';
   if (smtp.can_connect_smtp === false) return 'risky';
-  if (smtp.is_catch_all) return 'valid';
   return 'risky';
 }
 
